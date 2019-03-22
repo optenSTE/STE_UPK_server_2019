@@ -357,9 +357,9 @@ if __name__ == "__main__":
     # asyncio.async(get_wls_from_x55_coroutine())
 
     # получение пересчет длин волн в измерения и усреднение
-    asyncio.async(averaging_measurements())
+    loop.create_task(averaging_measurements())
 
     # отправка усредненных измерений на сервер
-    asyncio.async(send_avg_measurements())
+    loop.create_task(send_avg_measurements())
 
     loop.run_forever()
