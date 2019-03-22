@@ -11,5 +11,5 @@
 Требуемые компоненты и библиотеки:
 - python 3.7
 - websockets 7.0
-- asyncio
+- numpy 1.16.2
 - HyperionAPI 2.0 https://github.com/optenSTE/HyperionAPI
