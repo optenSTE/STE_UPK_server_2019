@@ -5,6 +5,22 @@ import asyncio
 import json
 import hyperion
 import datetime
+from scipy.signal import find_peaks
+
+# ToDo
+#  1. Расчет СКО
+#  2. Проверять соответствие каналов в описании оборудования и в приборе
+#  3. Запрос таблицы SoL для всех необходимых расстояний (в блоке инициализации)
+#  4. Автоматические настройки Distance compensation - распределить окна расстояний в соответствии с
+#     текущими значениями пиков. Соответствие пика расстоянию взять из предположения, что количество пиков соответствует
+#     количеству решеток в описании
+#  5. Актуализация настроек Distance compensation при приближении одного из текущих пиков к ранее заданным границам
+#  6. Автоматические PeakDetectionSettings - подбор параметра Threshold в соответствии с ожидаемым количеством пиков
+#  7. Определение мощности пиков через scipy.signal.find_peaks с подстройкой параметра prominence (пока не сойдется
+#     число найденны пиков с полученными с прибора)
+#  8. Запись сырых длин волн с исходной частотой в отдельные файлы
+
+
 
 # Настроечные переменные
 
@@ -15,17 +31,24 @@ speed_of_light = 299792458.0
 output_measurements_order = {'T_degC': 1, 'Fav_N': 3, 'Fbend_N': 5, 'Ice_mm': 7}  # последовательность выдачи данных
 DEFAULT_TIMEOUT = 10000
 
+# параметры распознавания пиков
+peak_distance_pm = 1000  # минимальное горизонтальное расстояние между соседними пиками, пм
+peak_height_dbm = 3  # минимальная высота пика, dBm
+peak_width_pm = [100, 600]  # ширина пика, пм
+
+# тайминги
+asyncio_pause_sec = 0.01            # длительность паузы в корутинах, чтобы другие могли работать
+x55_measurement_interval_sec = 0.1  # интервал выдачи измерений x55
+data_averaging_interval_sec = 1     # интервал усреднения данных
+one_spectrum_interval_sec = 60          # интервал получения единичного спектра
+
+
 # Глобальные переменные
 master_connection = None
 instrument_description = dict()
 h1 = None
 active_channels = set()
 devices = list()
-
-# тайминги
-asyncio_pause_sec = 0.01            # длительность паузы в корутинах, чтобы другие могли работать
-x55_measurement_interval_sec = 0.1  # интервал выдачи измерений x55
-data_averaging_interval_sec = 1     # интервал усреднения данных
 
 # хранение длин волн
 wls_buffer = dict()
@@ -42,7 +65,8 @@ queue = asyncio.Queue(maxsize=5, loop=loop)
 
 
 async def connection_handler(connection, path):
-    global master_connection, instrument_description, devices, active_channels, x55_measurement_interval_sec
+    global master_connection, instrument_description, devices, active_channels, x55_measurement_interval_sec, h1
+
     logging.info('New connection {} - path {}'.format(connection.remote_address[:2], path))
 
     if not master_connection:
@@ -173,6 +197,10 @@ async def connection_handler(connection, path):
         # запускаем стриминг пиков
         await hyperion.HCommTCPPeaksStreamer(instrument_ip, loop, queue).stream_data()
 
+        # запускаем процедуру периодического получения спектра
+        h1 = hyperion.AsyncHyperion(instrument_ip, loop)
+        await get_one_spectrum(h1)
+
 
 def return_error(e):
     """ функция принимает все ошибки программы, передает их на сервер"""
@@ -182,7 +210,7 @@ def return_error(e):
 
 async def get_wls_from_x55_coroutine():
     """ получение длин волн от x55 c исходной частотой (складирование в буффер в памяти) """
-    global wls_buffer, h1
+    global wls_buffer
 
     while True:
 
@@ -245,9 +273,6 @@ async def averaging_measurements():
                 for device in devices:
                     # переводим пики в пикометры
                     wls_pm = list(map(lambda wl: wl * 1000, peaks_by_channel[device.channel]))
-
-                    # переводим пики в пикометры, а также компенсируем все пики по расстоянию до текущего устройтва
-                    # wls_pm = list(map(lambda wl: h1.shift_wavelength_by_offset(wl, device.time_of_flight) * 1000, peaks_by_channel[device.channel]))
 
                     # среди всех пиков ищем 3 подходящих для теукущего измерителя
                     wls = device.find_yours_wls(wls_pm, device.channel)
@@ -324,11 +349,13 @@ async def send_avg_measurements():
             if master_connection:
                 logging.info('send message {} for connection {}'.format(msg, master_connection.remote_address[:2]))
 
-                # is client still alive?
+                # is client still alive? - прикрыто по причине нестыковки ping-pong в связке ОСМ-УПК
+                """
                 try:
                     await master_connection.ping()
                 except websockets.exceptions.ConnectionClosed:
                     continue
+                """
 
                 # send data block
                 try:
@@ -339,6 +366,45 @@ async def send_avg_measurements():
             del avg_buffer['data'][output_time]
         finally:
             avg_buffer['is_ready'] = True
+
+
+async def get_one_spectrum(hyperion_x55_async):
+    """
+    Функция получает единичный спектр, используя класс hyperion.AsyncHyperion
+    :param hyperion_x55_async: инициализированный класс hyperion.AsyncHyperion
+    :return:
+    """
+    while True:
+        # калибровка спектра (из попугаев в dBm)
+        await hyperion_x55_async.get_power_cal()
+
+        # спектр и пики с прибора
+        spectrum = await hyperion_x55_async.get_spectra()
+        peaks = await hyperion_x55_async.get_peaks()
+        raw_peaks = list()
+
+        spectrum_step_pm = (spectrum.wavelengths[1] - spectrum.wavelengths[0]) * 1000
+
+        # печать спектра
+        if 0:
+            for i in range(len(spectrum.wavelengths)):
+                wl = spectrum.wavelengths[i]
+                power = spectrum.data[channel][i]
+                print(i, wl, power)
+
+        for channel in spectrum.channel_map:
+            peak_indexes, peaks_properties = find_peaks(spectrum.data[channel], distance=peak_distance_pm/spectrum_step_pm, prominence=peak_height_dbm, width=peak_width_pm/spectrum_step_pm)
+
+            # пики по сырому спектру
+            for i in peak_indexes:
+                wl = spectrum.wavelengths[i]
+                power = spectrum.data[channel][i]
+                raw_peaks.append(wl)
+
+        print(datetime.datetime.utcnow(), spectrum.header.timestamp_int + spectrum.header.timestamp_frac * 1E-9,
+              'spectrum', spectrum.header.serial_number, raw_peaks)
+
+        await asyncio.sleep(one_spectrum_interval_sec)
 
 
 if __name__ == "__main__":
