@@ -12,4 +12,6 @@
 - python 3.7
 - websockets 7.0
 - numpy 1.16.2
+- scipy 1.2.1
 - HyperionAPI 2.0 https://github.com/optenSTE/HyperionAPI
+
