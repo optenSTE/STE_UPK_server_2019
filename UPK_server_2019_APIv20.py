@@ -8,8 +8,8 @@ import datetime
 
 # Настроечные переменные
 
-# address, port = '192.168.0.31', 7681  # адрес websocket-сервера
-address, port = '192.168.1.216', 7681  # адрес websocket-сервера
+address, port = '192.168.0.31', 7681  # адрес websocket-сервера
+# address, port = '192.168.1.216', 7681  # адрес websocket-сервера
 index_of_reflection = 1.4682
 speed_of_light = 299792458.0
 output_measurements_order = {'T_degC': 1, 'Fav_N': 3, 'Fbend_N': 5, 'Ice_mm': 7}  # последовательность выдачи данных
@@ -325,10 +325,12 @@ async def send_avg_measurements():
                 logging.info('send message {} for connection {}'.format(msg, master_connection.remote_address[:2]))
 
                 # is client still alive?
+                """
                 try:
                     await master_connection.ping()
                 except websockets.exceptions.ConnectionClosed:
                     continue
+                """
 
                 # send data block
                 try:
