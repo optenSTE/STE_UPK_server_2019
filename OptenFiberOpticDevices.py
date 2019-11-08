@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+import math
 
 # MicroOptics FBG-sensor class (either strain and temperature)
 class FBG:
@@ -52,6 +52,15 @@ class ODTiT:
         self.f_min = 0.0  # окно возможных тяжений провода, даН
         self.f_max = 400.0
         self.f_reserve = 1000.0  # запас по тяжению (расширяет диапазон f_min...f_max в обе стороны), даН
+
+        # полином вычисления ожидаемого тяжения Fожид(T) = f2*T^2 + f1*T + f0, где Т-температура
+        self.fmodel_f0 = 0
+        self.fmodel_f1 = 0
+        self.fmodel_f2 = 0
+
+        # полином вычисления стенки гололеда по превышению текущего тяжения над ожидаемым Fextra(Ice) = i2*Ice^2+i1*Ice
+        self.icemodel_i1 = 0
+        self.icemodel_i2 = 0
 
         # используются только для проверки принадлежности измерений температурной решетке
         self.t_min = -60.0  # минимальная эксплутационная температура, С
@@ -183,6 +192,17 @@ class ODTiT:
             f1 = (eps1 * self.e * self.size[0] * self.size[1]) / (1E+6 * 1E+6)
             f2 = (eps2 * self.e * self.size[0] * self.size[1]) / (1E+6 * 1E+6)
 
+            f_av = (f1 + f2) / 2
+
+            f_model = 10*(self.fmodel_f0 + self.fmodel_f1*temperature_value + self.fmodel_f2*temperature_value**2)
+            f_extra = f_av - f_model
+
+            ice_mm = None
+            if self.icemodel_i2 != 0:
+                ice_mm = (math.sqrt(4*self.icemodel_i2*f_extra/10.0 + self.icemodel_i1**2) - self.icemodel_i1)/(2*self.icemodel_i2)
+            if not -10.0 < temperature_value < 5.0:
+                ice_mm = 0.0
+
             return_value['T_degC'] = temperature_value
             return_value['eps1_ustr'] = eps1
             return_value['eps2_ustr'] = eps2
@@ -190,6 +210,6 @@ class ODTiT:
             return_value['F2_N'] = f2
             return_value['Fav_N'] = (f1 + f2) / 2
             return_value['Fbend_N'] = (eps1 - eps2) / (2 * self.bend_sens)
-            return_value['Ice_mm'] = temperature_value
+            return_value['Ice_mm'] = ice_mm
 
         return return_value
