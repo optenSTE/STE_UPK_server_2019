@@ -199,7 +199,9 @@ class ODTiT:
 
             ice_mm = None
             if self.icemodel_i2 != 0:
-                ice_mm = (math.sqrt(4*self.icemodel_i2*f_extra/10.0 + self.icemodel_i1**2) - self.icemodel_i1)/(2*self.icemodel_i2)
+                under_sqrt_seq = 4*self.icemodel_i2*f_extra/10.0 + self.icemodel_i1**2
+                if under_sqrt_seq > 0:
+                    ice_mm = (math.sqrt(under_sqrt_seq) - self.icemodel_i1)/(2*self.icemodel_i2)
             if not -10.0 < temperature_value < 5.0:
                 ice_mm = 0.0
 
