@@ -14,8 +14,8 @@ from pathlib import Path
 
 
 # Настроечные переменные
-
-address, port = '192.168.0.31', 7681  # адрес websocket-сервера
+hostname = socket.gethostname()
+address, port = socket.gethostbyname(hostname), 7681  # адрес websocket-сервера
 # address, port = '192.168.1.216', 7681  # адрес websocket-сервера
 index_of_reflection = 1.4682
 speed_of_light = 299792458.0
