@@ -11,6 +11,7 @@ import pandas as pd
 import sys
 import socket
 from pathlib import Path
+import statistics
 
 
 # Настроечные переменные
@@ -447,6 +448,9 @@ async def wls_to_measurements_coroutine():
     """получение пересчет длин волн в измерения"""
     global wavelengths_buffer, measurements_buffer
 
+    # приблизительная температура устройств, используется для поиска подходящего пика на спектре
+    t_recommended = None
+
     try:
         while True:
             await asyncio.sleep(asyncio_pause_sec)
@@ -461,6 +465,9 @@ async def wls_to_measurements_coroutine():
             while len(wavelengths_buffer['data']) < 2:
                 await asyncio.sleep(asyncio_pause_sec)
 
+            if not t_recommended:
+                t_recommended = (devices[0].t_max + devices[0].t_min) / 2
+
             # ждем освобождения буфера
             while not wavelengths_buffer['is_ready']:
                 await asyncio.sleep(asyncio_pause_sec)
@@ -473,37 +480,50 @@ async def wls_to_measurements_coroutine():
                 for (measurement_time, peaks_by_channel) in wavelengths_buffer['data'].items():
 
                     # время усредненного блока, в которое попадает это измерение
-                    averaged_block_time = measurement_time - measurement_time % (
-                                1 / instrument_description['SampleRate'])
+                    averaged_block_time = measurement_time - measurement_time % (1 / instrument_description['SampleRate'])
                     np.append([averaged_block_time], np.zeros(len(output_measurements_order2)))
 
                     devices_output3 = [measurement_time] + [np.nan] * len(output_measurements_order2) * len(devices)
 
                     raw_measurements_buffer_for_disk['data'][measurement_time] = [measurement_time]
 
-                    for device_num, device in enumerate(devices):
-                        # переводим пики в пикометры
-                        wls_pm = list(map(lambda wl: wl * 1000, peaks_by_channel[device.channel]))
+                    # переводим пики в пикометры
+                    for channel, wls in peaks_by_channel.items():
+                        peaks_by_channel[channel] = [wl*1000 for wl in wls]
+                        pass
 
+                    # шаг 1 - находим рекомендованную температуру
+                    temperatures = list()
+                    for device_num, device in enumerate(devices):
+                        wls = device.find_yours_wls(peaks_by_channel[device.channel], delete_founded_peaks=False)
+                        if wls:
+                            temperatures.append(device.get_temperature(wls[0]))
+
+                    # из списка температур выберем одну - которую будем рекомендовать далее
+                    if len(temperatures) > 1:
+                        t_recommended = statistics.median(temperatures)
+
+                    # шаг 2 - находим пики с учетом рекомендованной температуры
+                    for device_num, device in enumerate(devices):
                         # среди всех пиков ищем 3 подходящих для теукущего измерителя
-                        wls = device.find_yours_wls(wls_pm, device.channel)
+                        wls = device.find_yours_wls(peaks_by_channel[device.channel], device.channel, t_recommended)
 
                         # если все три пика измерителя нашлись, то вычисляем тяжения и пр. Нет - вставляем пустышки
                         if wls:
                             device_output = device.get_tension_fav_ex(wls[1], wls[2], wls[0])
 
                             for field_num, filed in enumerate(output_measurements_order2):
-                                devices_output3[1 + device_num * len(output_measurements_order2) + field_num] = \
-                                device_output[filed]
+                                devices_output3[1 + device_num * len(output_measurements_order2) + field_num] = device_output[filed]
 
                             raw_measurements_buffer_for_disk['data'][measurement_time].append(device_output['F1_N'])
                             raw_measurements_buffer_for_disk['data'][measurement_time].append(device_output['F2_N'])
                         else:
+                            none_value = None
                             for field_num, filed in enumerate(output_measurements_order2):
-                                devices_output3[1 + device_num * len(output_measurements_order2) + field_num] = 0
+                                devices_output3[1 + device_num * len(output_measurements_order2) + field_num] = none_value
 
-                            raw_measurements_buffer_for_disk['data'][measurement_time].append(0)
-                            raw_measurements_buffer_for_disk['data'][measurement_time].append(0)
+                            raw_measurements_buffer_for_disk['data'][measurement_time].append(none_value)
+                            raw_measurements_buffer_for_disk['data'][measurement_time].append(none_value)
 
                     if len(devices_output3) > 1:
 
@@ -526,15 +546,14 @@ async def wls_to_measurements_coroutine():
                     wavelengths_buffer['data'].pop(time)
 
             except Exception as e:
-                logging.error(f'Some error during avg measurements sorting - exception: {e.__doc__}')
+                pass
 
             finally:
                 wavelengths_buffer['is_ready'] = True
     finally:
         msg = 'wls_to_measurements is finishing'
         print(msg)
-        logging.critical(msg)
-
+        logging.debug(msg)
 
 async def averaging_measurements_coroutine():
     """усреднение измерений"""
