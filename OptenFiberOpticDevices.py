@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import math
+import copy
 
 # MicroOptics FBG-sensor class (either strain and temperature)
 class FBG:
@@ -76,47 +77,79 @@ class ODTiT:
         print_str = 'ODTiT device: %s\t%s\t%s\t%s' % (self.name, self.sensors[1].__str__(), self.sensors[2].__str__(), self.sensors[0].__str__())
         return print_str
 
-    def find_yours_wls(self, wls_pm, channel=0):
+    def find_yours_wls(self, wls_pm, channel=None, t_recommended=None, delete_founded_peaks=True):
         """Function checks is this wavelength belongs of
             this ODTiT device (any of optical sensor)
-
-        :param wl_pm: wavelength, pm
-        :param channel: channel num for MOI si255
-        :return: is the wavelength belongs of this ODTiT device
-
+        :param wls_pm: list(), список длин волн пиков, пм - после выполнения функции из него будут удалены найденные пики
+        :param channel: int(), номер канала, в настоящее время не используется, сохранени для совместимости
+        :param t_recommended: int(), ориентировочная температура - в случае обнаружения нескольких пиков у данныго ОДТиТ будет использован ближайший к этой температуре
+                                    по умолчанию None - в случае нескольких пиков будет ввозвращено False
+        :return: list()or Bool, wavelengths belongs of this ODTiT device or False
         """
-        wl_sensor0 = None
-        wl_sensor1 = None
-        wl_sensor2 = None
 
-        # сначала находим температурную решетку и рассчитываем температуру
+        ret_value = [None, None, None]
+
+        wls_local = copy.deepcopy(wls_pm)
+
         cur_t = None
-        for wl_pm in wls_pm:
-            if not cur_t and self.is_wl_of_temperature_sensor(wl_pm, channel):
-                wl_sensor0 = wl_pm
-                cur_t = self.get_temperature(wl_pm)
+        for sensor_num, sensor in enumerate(self.sensors):
+            # для каждой решетки описываются параметры выхова функции self._get_wl_from_value для вычисления wl_min, wl_max, wl_recommended
+            if sensor_num == 0:
+                if t_recommended:
+                    param = [[sensor_num, self.t_min], [sensor_num, self.t_max], [sensor_num, t_recommended]]
+                else:
+                    param = [[sensor_num, self.t_min], [sensor_num, self.t_max], [sensor_num, (self.t_min + self.t_max)/2]]
+            else:
+                param = [[sensor_num, cur_t, self.f_min - self.f_reserve], [sensor_num, cur_t, self.f_max + self.f_reserve], [sensor_num, cur_t, (self.f_min + self.f_max)/2]]  # для натяжной нет рекомендованной длины волны
 
-        # имея температуру, находим натяжные решетки
-        for wl_pm in wls_pm:
-            if cur_t and not wl_sensor1 and self.is_wl_of_strain_sensor(wl_pm, cur_t, 1, channel):
-                wl_sensor1 = wl_pm
-            elif cur_t and not wl_sensor2 and self.is_wl_of_strain_sensor(wl_pm, cur_t, 2, channel):
-                wl_sensor2 = wl_pm
+            wl_min = self._get_wl_from_value(*param[0])
+            wl_max = self._get_wl_from_value(*param[1])
+            wl_recommended = self._get_wl_from_value(*param[2])
 
-        # ToDo проверяем, что в окно возможных длин волн попадает только один пик
+            candidates = []
+            for wl in wls_local:
+                if wl_min < wl < wl_max:
+                    candidates.append(wl)
 
-        if wl_sensor0 and wl_sensor1 and wl_sensor2:
-            return (wl_sensor0, wl_sensor1, wl_sensor2)
-        return False
+            # ничего не найдено то продолжать нельзя
+            if len(candidates) == 0:
+                break
+
+            # найдено несколько пиков - выбираем ближайший по recommended_t
+            min_index = 0
+            if len(candidates) > 1:
+
+                # если нет рекомендованной температуры, то невозможно выбрать правильный вариант
+                if not t_recommended:
+                    break
+
+                diffs = [abs(wl-wl_recommended) for wl in candidates]
+                min_index = diffs.index(min(diffs))
+
+            # остался только один вариант - удаляем его из массива пиков
+            cur_sensor_wl = candidates[min_index]
+            ret_value[sensor_num] = cur_sensor_wl
+            wls_local.remove(cur_sensor_wl)  # удаляем пик из локальной базы, чтобы не мешался далее
+
+            if sensor_num == 0:
+                cur_t = self.get_temperature(cur_sensor_wl)
+
+        if None in ret_value:
+            return False
+
+        # найдены все 3 пика датчика, можно их удалять из исходного списка
+        if delete_founded_peaks:
+            for wl in ret_value:
+                wls_pm.remove(wl)
+
+        return ret_value
 
     def is_wl_of_temperature_sensor(self, wl_pm, channel=0):
         """Function checks is this wavelength belongs of
             this ODTiT device (temperature optical sensor)
-
         :param wl_pm: wavelength, pm
         :param channel: channel num for MOI si255
         :return: is the wavelength belongs of this ODTiT device
-
         """
 
         wl_max = self.sensors[0].wl0 * (1 + (self.t_max - self.sensors[0].t0) * self.sensors[0].st)
@@ -126,20 +159,18 @@ class ODTiT:
         if min(wl_min, wl_max) <= wl_pm <= max(wl_min, wl_max):
             ret_value = True
 
-        if self.channel > 0 and channel != self.channel:
+        if 0 < self.channel != channel:
             ret_value = False
 
         return ret_value
 
     def is_wl_of_strain_sensor(self, wl, t, sensor_num, channel=0):
         """For strain sensors os3110 checks is given WL belongs of this ODTiT device
-
         :param wl: measured strain sensor's wavelength, pm
         :param t: ODTiT device temperature, degC (by os4100 sensor)
         :param sensor_num: 1 or 2 - first or second sensor into ODTiT device
         :param channel: channel num for strain sensor, only for MIO instruments
         :return: is the wavelength belongs of this ODTiT device
-
         """
 
         if 1 < sensor_num > 2:
@@ -167,19 +198,35 @@ class ODTiT:
     def get_tension_fav(self, wl_tension_sensor_1, wl_tension_sensor_2, wl_temperature_sensor):
         return self.get_tension_fav_ex(wl_tension_sensor_1, wl_tension_sensor_2, wl_temperature_sensor)[0]
 
+    def _get_wl_from_value(self, sensor_num, temperature, force=0):
+        '''
+
+        :param sensor_num: int(), номер сенсора 0 - температурный, 1 и 2 - натяжной
+        :param temperature: float(), температура
+        :param force: float(), сила [даН] (для натяжных решеток)
+        :return: float(), длина волны, соответствующая заданным условиям
+        '''
+        if sensor_num == 0:
+            return self.sensors[0].wl0 * (1 + (temperature - self.sensors[0].t0) * self.sensors[0].st)
+        else:
+            # WL = WL_0 * (1 + ((f1 * 10 / (E * S) - (T - Ts1_0) * (CTET - CTES) / 1000000) * FG + (T - Tt_0) * ST));
+            return self.sensors[sensor_num].wl0 * (1 + (((force - self.f_reserve) * 10 / (self.e * self.size[0] * self.size[1] * 1E-6) - (temperature - self.sensors[sensor_num].t0) * (
+                    self.sensors[sensor_num].ctet - self.ctes) / 1E+6) * self.sensors[sensor_num].fg + (temperature - self.sensors[0].t0) * self.sensors[0].st))
+
+
     def get_tension_fav_ex(self, wl_tension_sensor_1, wl_tension_sensor_2,
                            wl_temperature_sensor, return_nan=False):
 
-        return_value = dict()
+        ret_value = dict()
 
-        return_value.setdefault('T_degC', None)
-        return_value.setdefault('eps1_ustr', None)
-        return_value.setdefault('eps2_ustr', None)
-        return_value.setdefault('F1_N', None)
-        return_value.setdefault('F2_N', None)
-        return_value.setdefault('Fav_N', None)
-        return_value.setdefault('Fbend_N', None)
-        return_value.setdefault('Ice_mm', None)
+        ret_value.setdefault('T_degC', None)
+        ret_value.setdefault('eps1_ustr', None)
+        ret_value.setdefault('eps2_ustr', None)
+        ret_value.setdefault('F1_N', None)
+        ret_value.setdefault('F2_N', None)
+        ret_value.setdefault('Fav_N', None)
+        ret_value.setdefault('Fbend_N', None)
+        ret_value.setdefault('Ice_mm', None)
 
         if not return_nan:
             temperature_value = self.get_temperature(wl_temperature_sensor)
@@ -202,16 +249,17 @@ class ODTiT:
                 under_sqrt_seq = 4*self.icemodel_i2*f_extra/10.0 + self.icemodel_i1**2
                 if under_sqrt_seq > 0:
                     ice_mm = (math.sqrt(under_sqrt_seq) - self.icemodel_i1)/(2*self.icemodel_i2)
+
             if not -10.0 < temperature_value < 5.0:
                 ice_mm = 0.0
 
-            return_value['T_degC'] = temperature_value
-            return_value['eps1_ustr'] = eps1
-            return_value['eps2_ustr'] = eps2
-            return_value['F1_N'] = f1
-            return_value['F2_N'] = f2
-            return_value['Fav_N'] = (f1 + f2) / 2
-            return_value['Fbend_N'] = (eps1 - eps2) / (2 * self.bend_sens)
-            return_value['Ice_mm'] = ice_mm
+            ret_value['T_degC'] = temperature_value
+            ret_value['eps1_ustr'] = eps1
+            ret_value['eps2_ustr'] = eps2
+            ret_value['F1_N'] = f1
+            ret_value['F2_N'] = f2
+            ret_value['Fav_N'] = (f1 + f2) / 2
+            ret_value['Fbend_N'] = (eps1 - eps2) / (2 * self.bend_sens)
+            ret_value['Ice_mm'] = ice_mm
 
-        return return_value
+        return ret_value
