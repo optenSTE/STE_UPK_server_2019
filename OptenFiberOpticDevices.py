@@ -2,6 +2,7 @@
 import math
 import copy
 
+
 # MicroOptics FBG-sensor class (either strain and temperature)
 class FBG:
 
@@ -187,7 +188,7 @@ class ODTiT:
         if min(wl_min, wl_max) <= wl <= max(wl_min, wl_max):
             ret_value = True
 
-        if self.channel > 0 and channel != self.channel:
+        if 0 < self.channel != channel:
             ret_value = False
 
         return ret_value
@@ -200,7 +201,6 @@ class ODTiT:
 
     def _get_wl_from_value(self, sensor_num, temperature, force=0):
         '''
-
         :param sensor_num: int(), номер сенсора 0 - температурный, 1 и 2 - натяжной
         :param temperature: float(), температура
         :param force: float(), сила [даН] (для натяжных решеток)
@@ -212,7 +212,6 @@ class ODTiT:
             # WL = WL_0 * (1 + ((f1 * 10 / (E * S) - (T - Ts1_0) * (CTET - CTES) / 1000000) * FG + (T - Tt_0) * ST));
             return self.sensors[sensor_num].wl0 * (1 + (((force - self.f_reserve) * 10 / (self.e * self.size[0] * self.size[1] * 1E-6) - (temperature - self.sensors[sensor_num].t0) * (
                     self.sensors[sensor_num].ctet - self.ctes) / 1E+6) * self.sensors[sensor_num].fg + (temperature - self.sensors[0].t0) * self.sensors[0].st))
-
 
     def get_tension_fav_ex(self, wl_tension_sensor_1, wl_tension_sensor_2,
                            wl_temperature_sensor, return_nan=False):
