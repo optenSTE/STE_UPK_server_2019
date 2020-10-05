@@ -545,14 +545,15 @@ async def wls_to_measurements_coroutine():
                     wavelengths_buffer['data'].pop(time)
 
             except Exception as e:
-                pass
+                logging.error(f'Some error during avg measurements sorting - exception: {e.__doc__}')
 
             finally:
                 wavelengths_buffer['is_ready'] = True
     finally:
         msg = 'wls_to_measurements is finishing'
         print(msg)
-        logging.debug(msg)
+        logging.critical(msg)
+
 
 async def averaging_measurements_coroutine():
     """усреднение измерений"""
